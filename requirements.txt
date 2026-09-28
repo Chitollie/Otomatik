@@ -3,6 +3,6 @@ PyGithub>=2.5,<3
 requests>=2.32,<3
 keyring>=25,<26
 pyautogui>=0.9.54,<1
-pydirectinput-rgx>=1.0.4,<2
+pydirectinput-rgx>=2,<3
 opencv-python>=4.10,<5
 numpy>=2.0,<3
