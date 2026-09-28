@@ -6,3 +6,4 @@ pyautogui>=0.9.54,<1
 pydirectinput-rgx>=2,<3
 opencv-python>=4.10,<5
 numpy>=2.0,<3
+pytesseract
