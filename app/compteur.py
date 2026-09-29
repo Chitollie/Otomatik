@@ -120,11 +120,13 @@ def bundled_tessdata():
 
 def resolve_language(tesseract_path):
     folder = bundled_tessdata()
+    if folder is None:
+        candidate = Path(tesseract_path).parent / "tessdata"
+        if (candidate / "fra.traineddata").exists():
+            folder = candidate
     if folder:
-        return "fra", f'--tessdata-dir "{folder.as_posix()}"'
-    if (Path(tesseract_path).parent / "tessdata" / "fra.traineddata").exists():
-        return "fra", ""
-    return "eng", ""
+        return "fra", str(folder)
+    return "eng", None
 
 
 class Compteur:
@@ -134,7 +136,6 @@ class Compteur:
         self.thread = None
         self.lock = threading.Lock()
         self.lang = "eng"
-        self.tess_config = ""
         self.counts = {name: 0 for name in FISH_PRICES}
         self.elapsed = 0.0
         self.started_at = None
@@ -152,7 +153,9 @@ class Compteur:
         if not path:
             self.log("Tesseract OCR introuvable : installe-le puis relance le compteur.")
             return
-        self.lang, self.tess_config = resolve_language(path)
+        self.lang, tessdata_dir = resolve_language(path)
+        if tessdata_dir:
+            os.environ["TESSDATA_PREFIX"] = tessdata_dir
         self.stop_event.clear()
         with self.lock:
             self.started_at = time.time()
@@ -207,9 +210,7 @@ class Compteur:
             for img in (gray, threshold):
                 try:
                     texts.append(
-                        pytesseract.image_to_string(
-                            img, lang=self.lang, config=f"--psm 6 {self.tess_config}".strip()
-                        )
+                        pytesseract.image_to_string(img, lang=self.lang, config="--psm 6")
                     )
                 except Exception:
                     pass
