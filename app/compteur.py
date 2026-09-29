@@ -1,9 +1,12 @@
 import os
 import re
+import shutil
+import sys
 import threading
 import time
 import unicodedata
 from difflib import SequenceMatcher
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -13,6 +16,11 @@ try:
     import pytesseract
 except ImportError:
     pytesseract = None
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 REF_W, REF_H = 1920, 1080
 NOTIFICATION_ROI = (1300, 0, 620, 180)
@@ -78,20 +86,45 @@ def format_money(value):
     return f"{int(value):,}".replace(",", " ") + " $"
 
 
-def setup_tesseract():
-    if pytesseract is None:
-        return False
-
+def find_tesseract():
     for path in TESSERACT_PATHS:
         if os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            return True
+            return path
 
-    try:
-        pytesseract.get_tesseract_version()
-        return True
-    except Exception:
-        return False
+    if winreg is not None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Tesseract-OCR") as key:
+                path = os.path.join(winreg.QueryValueEx(key, "InstallDir")[0], "tesseract.exe")
+                if os.path.exists(path):
+                    return path
+        except OSError:
+            pass
+
+    return shutil.which("tesseract")
+
+
+def setup_tesseract():
+    if pytesseract is None:
+        return None
+    path = find_tesseract()
+    if path:
+        pytesseract.pytesseract.tesseract_cmd = path
+    return path
+
+
+def bundled_tessdata():
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    folder = base / "tessdata"
+    return folder if (folder / "fra.traineddata").exists() else None
+
+
+def resolve_language(tesseract_path):
+    folder = bundled_tessdata()
+    if folder:
+        return "fra", f'--tessdata-dir "{folder.as_posix()}"'
+    if (Path(tesseract_path).parent / "tessdata" / "fra.traineddata").exists():
+        return "fra", ""
+    return "eng", ""
 
 
 class Compteur:
@@ -101,20 +134,25 @@ class Compteur:
         self.thread = None
         self.lock = threading.Lock()
         self.lang = "eng"
+        self.tess_config = ""
         self.counts = {name: 0 for name in FISH_PRICES}
         self.elapsed = 0.0
         self.started_at = None
 
+    @property
+    def running(self):
+        return self.started_at is not None
+
     def start(self):
         if self.thread and self.thread.is_alive():
+            if not self.stop_event.is_set():
+                return
+            self.thread.join(timeout=1)
+        path = setup_tesseract()
+        if not path:
+            self.log("Tesseract OCR introuvable : installe-le puis relance le compteur.")
             return
-        if not setup_tesseract():
-            self.log("Compteur : Tesseract OCR introuvable (pip install pytesseract + installer Tesseract).")
-            return
-        try:
-            self.lang = "fra" if "fra" in pytesseract.get_languages(config="") else "eng"
-        except Exception:
-            self.lang = "eng"
+        self.lang, self.tess_config = resolve_language(path)
         self.stop_event.clear()
         with self.lock:
             self.started_at = time.time()
@@ -140,7 +178,8 @@ class Compteur:
         with self.lock:
             counts = dict(self.counts)
             elapsed = self.elapsed
-            if self.started_at is not None:
+            running = self.started_at is not None
+            if running:
                 elapsed += time.time() - self.started_at
         total = sum(FISH_PRICES[name] * n for name, n in counts.items())
         per_hour = total / elapsed * 3600 if elapsed > 5 else 0
@@ -149,7 +188,7 @@ class Compteur:
             "total": total,
             "per_hour": per_hour,
             "elapsed": elapsed,
-            "running": self.started_at is not None,
+            "running": running,
         }
 
     def capture(self):
@@ -167,7 +206,11 @@ class Compteur:
             texts = []
             for img in (gray, threshold):
                 try:
-                    texts.append(pytesseract.image_to_string(img, lang=self.lang, config="--psm 6"))
+                    texts.append(
+                        pytesseract.image_to_string(
+                            img, lang=self.lang, config=f"--psm 6 {self.tess_config}".strip()
+                        )
+                    )
                 except Exception:
                     pass
             return "\n".join(texts)

@@ -32,7 +32,7 @@ if errorlevel 1 goto error
 echo.
 echo Installation terminee.
 echo Lancement d'Otomatik...
-py -3.13 -m app.main
+py -3.13 run.py
 exit /b 0
 
 :error

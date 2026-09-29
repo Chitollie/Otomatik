@@ -1,60 +1,286 @@
 import sys
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QListWidget,QStackedWidget,QPlainTextEdit,QDoubleSpinBox,QFormLayout,QDialog,QLineEdit,QMessageBox,QTableWidget,QTableWidgetItem,QHeaderView
-from .config import *
-from .autofish import AutoFish
-from .antiafk import AntiAFK
-from .compteur import Compteur,FISH_PRICES,format_money
-from .updater import Updater
+import threading
 
-STYLE='''QWidget{background:#0b0f14;color:#e7edf5;font-family:Segoe UI} QListWidget,QPlainTextEdit,QTableWidget{background:#101722;border:1px solid #1c2a3a;border-radius:8px} QListWidget::item{padding:12px} QListWidget::item:selected{background:#0879d1} QPushButton{background:#0879d1;color:white;border:0;border-radius:7px;padding:10px 16px} QPushButton:hover{background:#0a8be9} QHeaderView::section{background:#0e151e;color:#e7edf5;border:0;padding:6px} QDoubleSpinBox,QLineEdit{background:#0e151e;border:1px solid #26384b;border-radius:6px;padding:7px}'''
-DEFAULT={'ref_w':1920,'ref_h':1080,'roi_x':1082,'roi_y':245,'roi_w':40,'roi_h':592,'hold_duration':4.0,'bite_timeout':120.0,'minigame_timeout':60.0,'minigame_end_delay':.6,'scan_interval':.01,'recast_min':.5,'recast_max':2.0,'green_min':.005,'cast_key':'e','catch_key':'space'}
-class Settings(QDialog):
- def __init__(self,cfg,parent=None):
-  super().__init__(parent); self.cfg=cfg; self.setWindowTitle('Paramètres AutoFish'); f=QFormLayout(self); self.box={}
-  for k,v in cfg.items():
-   if isinstance(v,(int,float)):
-    b=QDoubleSpinBox(); b.setRange(0,10000); b.setDecimals(4); b.setValue(v); self.box[k]=b; f.addRow(k,b)
-  for k in ('cast_key','catch_key'):
-   b=QLineEdit(cfg[k]); self.box[k]=b; f.addRow(k,b)
-  ok=QPushButton('Enregistrer'); ok.clicked.connect(self.accept); f.addRow(ok)
- def accept(self):
-  for k,b in self.box.items(): self.cfg[k]=b.value() if hasattr(b,'value') else b.text(); super().accept()
+from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .antiafk import AntiAFK
+from .autofish import AutoFish
+from .bus import Bus
+from .compteur import Compteur
+from .config import APP_NAME, APP_VERSION, data_dir, load_settings
+from .discord_auth import DiscordAuth, DiscordError
+from .hotkey import HotkeyWatcher
+from .pages import AntiAFKPage, AutoFishPage, CompteurPage, SettingsDialog, UpdatePage
+from .theme import STYLE, make_button
+from .updater import Updater, UpdateError
+
+AVATAR_SIZE = 40
+
+
+def round_pixmap(data, size):
+    source = QPixmap()
+    if not data or not source.loadFromData(data):
+        return QPixmap()
+    source = source.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+    result = QPixmap(size, size)
+    result.fill(Qt.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.Antialiasing)
+    path = QPainterPath()
+    path.addEllipse(QRectF(0, 0, size, size))
+    painter.setClipPath(path)
+    painter.drawPixmap(0, 0, source)
+    painter.end()
+    return result
+
+
 class Main(QMainWindow):
- def __init__(self):
-  super().__init__(); self.setWindowTitle('Otomatik 1.0.0'); self.resize(950,600); self.setStyleSheet(STYLE); self.cfg=DEFAULT.copy(); self.af=AutoFish(self.cfg,self.log); self.aa=AntiAFK({},self.log); self.ct=Compteur(self.log)
-  c=QWidget(); self.setCentralWidget(c); root=QHBoxLayout(c); left=QVBoxLayout(); title=QLabel('Otomatik'); title.setStyleSheet('font-size:22px;font-weight:700'); left.addWidget(title); self.nav=QListWidget(); self.nav.addItems(['AutoFish','Compteur','AntiAFK','Mise à jour']); self.nav.currentRowChanged.connect(self.stack_to); left.addWidget(self.nav); left.addStretch(); self.login=QPushButton('Connexion Discord'); left.addWidget(self.login); root.addLayout(left,1)
-  self.stack=QStackedWidget(); self.stack.addWidget(self.auto_page()); self.stack.addWidget(self.counter_page()); self.stack.addWidget(self.afk_page()); self.stack.addWidget(self.update_page()); root.addWidget(self.stack,3); self.nav.setCurrentRow(0); self.timer=QTimer(self); self.timer.timeout.connect(self.refresh_counter); self.timer.start(300)
- def auto_page(self):
-  p=QWidget(); l=QVBoxLayout(p); l.addWidget(QLabel('AutoFish')); r=QHBoxLayout();
-  for txt,fn in [('Lancer',self.af.start),('Arrêter',self.af.stop),('Pause',self.af.pause),('Reprendre',self.af.resume),('Paramètres',self.settings)]: b=QPushButton(txt); b.clicked.connect(fn); r.addWidget(b)
-  l.addLayout(r); self.console=QPlainTextEdit(); self.console.setReadOnly(True); l.addWidget(self.console); return p
- def counter_page(self):
-  p=QWidget(); l=QVBoxLayout(p); l.addWidget(QLabel('Compteur de pêche')); r=QHBoxLayout()
-  for txt,fn in [('Lancer',self.ct.start),('Arrêter',self.ct.stop),('Réinitialiser',self.ct.reset)]: b=QPushButton(txt); b.clicked.connect(fn); r.addWidget(b)
-  l.addLayout(r); self.ct_total=QLabel(format_money(0)); self.ct_total.setStyleSheet('font-size:36px;font-weight:700;color:#0a8be9'); l.addWidget(self.ct_total)
-  self.ct_rate=QLabel('0 $ / heure'); l.addWidget(self.ct_rate)
-  self.ct_table=QTableWidget(len(FISH_PRICES),4); self.ct_table.setHorizontalHeaderLabels(['Poisson','Prix','Quantité','Total']); self.ct_table.verticalHeader().setVisible(False); self.ct_table.setEditTriggers(QTableWidget.NoEditTriggers); self.ct_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-  for i,(name,price) in enumerate(FISH_PRICES.items()):
-   for j,v in enumerate((name,format_money(price),'0',format_money(0))): self.ct_table.setItem(i,j,QTableWidgetItem(v))
-  l.addWidget(self.ct_table); return p
- def refresh_counter(self):
-  s=self.ct.snapshot(); self.ct_total.setText(format_money(s['total'])); self.ct_rate.setText(f"{format_money(s['per_hour'])} / heure")
-  for i,(name,price) in enumerate(FISH_PRICES.items()):
-   n=s['counts'][name]; self.ct_table.item(i,2).setText(str(n)); self.ct_table.item(i,3).setText(format_money(n*price))
- def afk_page(self):
-  p=QWidget(); l=QVBoxLayout(p); l.addWidget(QLabel('AntiAFK')); r=QHBoxLayout();
-  for txt,fn in [('Lancer',self.aa.start),('Arrêter',self.aa.stop)]: b=QPushButton(txt); b.clicked.connect(fn); r.addWidget(b)
-  l.addLayout(r); l.addWidget(QLabel('S → Z → attente 20 minutes → répétition')); return p
- def update_page(self):
-  p=QWidget(); l=QVBoxLayout(p); l.addWidget(QLabel('Mise à jour')); b=QPushButton('Vérifier les mises à jour'); b.clicked.connect(self.update); l.addWidget(b); l.addStretch(); return p
- def stack_to(self,i): self.stack.setCurrentIndex(i)
- def settings(self):
-  if Settings(self.cfg,self).exec(): self.log('Paramètres enregistrés.')
- def log(self,x):
-  if hasattr(self,'console'): self.console.appendPlainText(x)
- def update(self):
-  try:
-   m=Updater().manifest(); QMessageBox.information(self,'Otomatik',f"Version disponible : {m['version']}\n\n{m.get('notes','')}")
-  except Exception as e: QMessageBox.critical(self,'Mise à jour',str(e))
-app=QApplication(sys.argv); w=Main(); w.show(); sys.exit(app.exec())
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.resize(1040, 700)
+        self.setMinimumSize(920, 620)
+        self.setStyleSheet(STYLE)
+
+        self.cfg = load_settings()
+        self.bus = Bus()
+        self.autofish = AutoFish(self.cfg, self.logger("autofish"))
+        self.antiafk = AntiAFK(self.cfg, self.logger("afk"))
+        self.compteur = Compteur(self.logger("compteur"))
+        self.updater = Updater()
+        self.auth = DiscordAuth()
+        self.user = None
+        self.login_running = False
+
+        self.pages = {
+            "AutoFish": AutoFishPage(self.cfg, self.autofish, self.open_settings),
+            "Compteur": CompteurPage(self.compteur),
+            "AntiAFK": AntiAFKPage(self.cfg, self.antiafk),
+            "Mises à jour": UpdatePage(self.check_updates, self.download_update),
+        }
+        self.log_targets = {
+            "autofish": self.pages["AutoFish"].log,
+            "compteur": self.pages["Compteur"].log,
+            "afk": self.pages["AntiAFK"].log,
+        }
+
+        self.build_layout()
+        self.connect_signals()
+
+        self.hotkey = HotkeyWatcher(lambda: self.cfg["pause_key"], self.autofish.toggle_pause)
+        self.hotkey.start()
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh_current)
+        self.timer.start(300)
+
+        threading.Thread(target=self.restore_discord, daemon=True).start()
+        self.check_updates()
+
+    def logger(self, channel):
+        return lambda text: self.bus.log.emit(channel, text)
+
+    def build_layout(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(230)
+        sidebar.setStyleSheet("QFrame#sidebar { background: #0e151e; border-right: 1px solid #1c2a3a; }")
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 20, 16, 16)
+        side.setSpacing(12)
+
+        title = QLabel(APP_NAME)
+        title.setObjectName("title")
+        version = QLabel(f"Version {APP_VERSION}")
+        version.setObjectName("muted")
+        side.addWidget(title)
+        side.addWidget(version)
+
+        self.nav = QListWidget()
+        self.nav.addItems(list(self.pages))
+        self.nav.setStyleSheet("QListWidget { border: 0; background: transparent; }")
+        self.nav.currentRowChanged.connect(lambda row: self.stack.setCurrentIndex(row))
+        side.addWidget(self.nav, 1)
+
+        side.addWidget(self.build_discord_card())
+
+        self.stack = QStackedWidget()
+        for page in self.pages.values():
+            self.stack.addWidget(page)
+
+        root.addWidget(sidebar)
+        root.addWidget(self.stack, 1)
+        self.nav.setCurrentRow(0)
+
+    def build_discord_card(self):
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        identity = QHBoxLayout()
+        identity.setSpacing(10)
+        self.avatar = QLabel()
+        self.avatar.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
+        self.avatar.setStyleSheet("background: #1c2a3a; border-radius: 20px;")
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        self.user_name = QLabel("Non connecté")
+        self.user_role = QLabel("Discord")
+        self.user_role.setObjectName("muted")
+        names.addWidget(self.user_name)
+        names.addWidget(self.user_role)
+        identity.addWidget(self.avatar)
+        identity.addLayout(names, 1)
+
+        self.discord_button = make_button("Connexion Discord", self.toggle_discord)
+        layout.addLayout(identity)
+        layout.addWidget(self.discord_button)
+        return card
+
+    def connect_signals(self):
+        self.bus.log.connect(lambda channel, text: self.log_targets[channel].add(text))
+        self.bus.login_done.connect(self.on_login_done)
+        self.bus.login_failed.connect(self.on_login_failed)
+        self.bus.update_checked.connect(self.pages["Mises à jour"].show_result)
+        self.bus.update_failed.connect(self.pages["Mises à jour"].show_error)
+        self.bus.update_downloaded.connect(self.on_update_downloaded)
+
+    def refresh_current(self):
+        self.stack.currentWidget().refresh()
+
+    def open_settings(self):
+        if SettingsDialog(self.cfg, self).exec():
+            self.bus.log.emit("autofish", "Paramètres enregistrés.")
+
+    def toggle_discord(self):
+        if self.user:
+            self.auth.logout()
+            self.user = None
+            self.show_user(None)
+        elif self.login_running:
+            self.auth.cancel()
+        else:
+            self.login_running = True
+            self.discord_button.setText("Annuler (navigateur ouvert)")
+            self.discord_button.setProperty("variant", "secondary")
+            self.discord_button.style().unpolish(self.discord_button)
+            self.discord_button.style().polish(self.discord_button)
+            threading.Thread(target=self.login_worker, daemon=True).start()
+
+    def login_worker(self):
+        try:
+            user = self.auth.login()
+        except DiscordError as error:
+            self.bus.login_failed.emit(str(error))
+        except Exception as error:
+            self.bus.login_failed.emit(f"Erreur inattendue : {error}")
+        else:
+            self.bus.login_done.emit(user)
+
+    def restore_discord(self):
+        user = self.auth.restore()
+        if user:
+            self.bus.login_done.emit(user)
+
+    def on_login_done(self, user):
+        self.login_running = False
+        self.user = user
+        self.show_user(user)
+
+    def on_login_failed(self, message):
+        self.login_running = False
+        self.show_user(None)
+        if message != "Connexion annulée.":
+            QMessageBox.warning(self, "Connexion Discord", message)
+
+    def show_user(self, user):
+        button = self.discord_button
+        button.setProperty("variant", "secondary" if user else None)
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+        if user is None:
+            self.user_name.setText("Non connecté")
+            self.user_role.setText("Discord")
+            self.avatar.setPixmap(QPixmap())
+            button.setText("Connexion Discord")
+            return
+
+        self.user_name.setText(user.name)
+        self.user_role.setText("Administrateur" if user.is_admin else "Connecté")
+        pixmap = round_pixmap(user.avatar, AVATAR_SIZE)
+        if not pixmap.isNull():
+            self.avatar.setPixmap(pixmap)
+        button.setText("Déconnexion")
+
+    def check_updates(self):
+        self.pages["Mises à jour"].show_checking()
+        threading.Thread(target=self.check_worker, daemon=True).start()
+
+    def check_worker(self):
+        try:
+            self.bus.update_checked.emit(self.updater.check())
+        except UpdateError as error:
+            self.bus.update_failed.emit(str(error))
+        except Exception as error:
+            self.bus.update_failed.emit(f"Vérification impossible : {error}")
+
+    def download_update(self):
+        info = self.pages["Mises à jour"].info
+        if info is None:
+            return
+        if info.url:
+            QDesktopServices.openUrl(QUrl(info.url))
+            return
+        folder = data_dir() / "updates" / info.version
+        threading.Thread(target=self.download_worker, args=(info, folder), daemon=True).start()
+
+    def download_worker(self, info, folder):
+        try:
+            self.updater.download(info, folder)
+            self.bus.update_downloaded.emit(str(folder))
+        except Exception as error:
+            self.bus.update_failed.emit(str(error))
+
+    def on_update_downloaded(self, folder):
+        self.pages["Mises à jour"].show_downloaded(folder)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def closeEvent(self, event):
+        self.hotkey.stop()
+        self.antiafk.stop()
+        self.compteur.stop()
+        self.autofish.stop(wait=True)
+        super().closeEvent(event)
+
+
+def main():
+    app = QApplication(sys.argv)
+    window = Main()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
