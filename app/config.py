@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "Otomatik"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.3"
 
 GITHUB_OWNER = "Chitollie"
 GITHUB_REPO = "Otomatik"
