@@ -24,6 +24,7 @@
 
 [Setup]
 AppId={{6F37FA3B-FC90-49C7-BCFE-CACAEDAA1465}
+SetupIconFile=iconn.ico
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -55,10 +56,11 @@ Name: "tesseract"; Description: "Installer Tesseract OCR (necessaire au Compteur
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\tessdata\fra.traineddata"; DestDir: "{app}\tessdata"; Flags: ignoreversion
+Source: "iconn.ico"; DestDir: "{app}"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Lancer Otomatik"; Flags: nowait postinstall skipifsilent
