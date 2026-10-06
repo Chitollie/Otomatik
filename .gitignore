@@ -3,6 +3,3 @@ __pycache__/
 build/
 dist/
 installer/installer_output/
-*.bat
-*.spec
-*.exe
