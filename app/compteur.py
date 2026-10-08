@@ -136,6 +136,7 @@ class Compteur:
         self.thread = None
         self.lock = threading.Lock()
         self.lang = "eng"
+        self.reported_errors = set()
         self.counts = {name: 0 for name in FISH_PRICES}
         self.elapsed = 0.0
         self.started_at = None
@@ -149,6 +150,9 @@ class Compteur:
             if not self.stop_event.is_set():
                 return
             self.thread.join(timeout=1)
+        if pytesseract is None:
+            self.log("Compteur : le module pytesseract est absent de l'application (problème de build de l'EXE).")
+            return
         path = setup_tesseract()
         if not path:
             self.log("Tesseract OCR introuvable : installe-le puis relance le compteur.")
@@ -156,6 +160,8 @@ class Compteur:
         self.lang, tessdata_dir = resolve_language(path)
         if tessdata_dir:
             os.environ["TESSDATA_PREFIX"] = tessdata_dir
+        self.log(f"Compteur : Tesseract = {path} | langue = {self.lang} | tessdata = {tessdata_dir or 'défaut'}")
+        self.reported_errors.clear()
         self.stop_event.clear()
         with self.lock:
             self.started_at = time.time()
@@ -212,11 +218,19 @@ class Compteur:
                     texts.append(
                         pytesseract.image_to_string(img, lang=self.lang, config="--psm 6")
                     )
-                except Exception:
-                    pass
+                except Exception as error:
+                    self.report_error(f"OCR : {error}")
             return "\n".join(texts)
-        except Exception:
+        except Exception as error:
+            self.report_error(f"Capture d'écran : {error}")
             return ""
+
+    def report_error(self, message):
+        message = " ".join(str(message).split())[:300]
+        if message in self.reported_errors or len(self.reported_errors) >= 5:
+            return
+        self.reported_errors.add(message)
+        self.log(f"Compteur : erreur — {message}")
 
     def run(self):
         self.log("Compteur : démarré.")

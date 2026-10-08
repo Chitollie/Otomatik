@@ -14,7 +14,7 @@
 #endif
 
 #define MyAppName "Otomatik"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "Chitollie"
 #define MyAppURL "https://github.com/Chitollie/Otomatik"
 #define MyAppExeName "Otomatik.exe"

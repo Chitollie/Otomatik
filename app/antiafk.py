@@ -1,7 +1,88 @@
+import ctypes
 import threading
 import time
+from ctypes import wintypes
 
 import pydirectinput
+
+KEY_LEFT = "q"
+KEY_RIGHT = "d"
+HOLD_SECONDS = 0.35
+GAP_SECONDS = 0.15
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+MAPVK_VK_TO_VSC = 0
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class INPUT(ctypes.Structure):
+    class _Union(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
+
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", _Union)]
+
+
+def user32():
+    return getattr(getattr(ctypes, "windll", None), "user32", None)
+
+
+def scan_code(char):
+    """Code physique de la touche qui porte cette lettre sur TON clavier (AZERTY ou QWERTY)."""
+    api = user32()
+    if api is None:
+        return None
+    vk = api.VkKeyScanW(ord(char)) & 0xFF
+    if vk == 0xFF:
+        return None
+    return api.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) or None
+
+
+def send_scan(scan, up=False):
+    flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if up else 0)
+    event = INPUT(type=INPUT_KEYBOARD)
+    event.ki = KEYBDINPUT(0, scan, flags, 0, 0)
+    if user32().SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+        raise OSError("SendInput a été refusé par Windows (le jeu tourne-t-il en administrateur ?)")
+
+
+def hold_key(key, seconds, stop_event):
+    """Maintient la touche `seconds` secondes. Renvoie True si on a demandé l'arrêt."""
+    scan = scan_code(key)
+    if scan:
+        press = lambda: send_scan(scan)
+        release = lambda: send_scan(scan, up=True)
+    else:
+        press = lambda: pydirectinput.keyDown(key)
+        release = lambda: pydirectinput.keyUp(key)
+
+    press()
+    try:
+        return stop_event.wait(seconds)
+    finally:
+        release()
 
 
 class AntiAFK:
@@ -39,17 +120,20 @@ class AntiAFK:
         }
 
     def run(self):
-        self.log("Démarré : première action dans 5 secondes.")
+        left, right = KEY_LEFT.upper(), KEY_RIGHT.upper()
+        self.log("Démarré : première action dans 5 secondes (le jeu doit être au premier plan).")
         try:
             if self.stop_event.wait(5):
                 return
             while True:
-                pydirectinput.press("s")
-                if self.stop_event.wait(0.25):
+                if hold_key(KEY_LEFT, HOLD_SECONDS, self.stop_event):
                     break
-                pydirectinput.press("z")
+                if self.stop_event.wait(GAP_SECONDS):
+                    break
+                if hold_key(KEY_RIGHT, HOLD_SECONDS, self.stop_event):
+                    break
                 self.cycles += 1
-                self.log("S puis Z envoyés.")
+                self.log(f"{left} puis {right} envoyés.")
                 self.next_at = time.time() + self.cfg["afk_minutes"] * 60
                 if self.stop_event.wait(self.cfg["afk_minutes"] * 60):
                     break
